@@ -1,73 +1,116 @@
-pipeline{
+
+pipeline {
     agent any
-    tools{
+
+    tools {
         jdk 'jdk17'
         nodejs 'node23'
     }
+
     environment {
-        SCANNER_HOME=tool 'sonar-scanner'
+        SCANNER_HOME = tool 'sonar-scanner'
     }
+
     stages {
-        stage('clean workspace'){
-            steps{
+        stage('Clean Workspace') {
+            steps {
                 cleanWs()
             }
         }
-        stage('Checkout from Git'){
-            steps{
-                git 'https://github.com/KastroVKiran/DevOps-Project-Swiggy.git'
+
+        stage('Checkout from Git') {
+            steps {
+                git 'https://github.com/anilkumarvanum9-debug/DevOps-Project-Swiggy.git'
             }
         }
-        stage("Sonarqube Analysis "){
-            steps{
+
+        stage('SonarQube Analysis') {
+            steps {
                 withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Swiggy \
-                    -Dsonar.projectKey=Swiggy '''
+                    sh '''
+                        "$SCANNER_HOME/bin/sonar-scanner" \
+                          -Dsonar.projectName=Swiggy \
+                          -Dsonar.projectKey=Swiggy
+                    '''
                 }
             }
         }
-        stage("quality gate"){
-           steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
                 }
-            } 
+            }
         }
+
         stage('Install Dependencies') {
             steps {
-                sh "npm install"
+                sh 'npm install'
             }
         }
-        stage('OWASP FS SCAN') {
+
+        stage('OWASP FS Scan') {
             steps {
-                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
+                dependencyCheck(
+                    additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit',
+                    odcInstallation: 'DP-Check'
+                )
                 dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
             }
         }
-        stage('TRIVY FS SCAN') {
+
+        stage('Trivy FS Scan') {
             steps {
-                sh "trivy fs . > trivyfs.txt"
+                sh '/usr/bin/trivy fs . > trivyfs.txt'
             }
         }
-        stage("Docker Build & Push"){
-            steps{
-                script{
-                   withDockerRegistry(credentialsId: 'docker-creds', toolName: 'docker'){   
-                       sh "docker build -t swiggy ."
-                       sh "docker tag swiggy kastrov/swiggy:latest "
-                       sh "docker push kastrov/swiggy:latest "
-                    }
+
+        stage('Docker Build & Push') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'docker-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+
+                        echo "$DOCKER_PASS" | /usr/bin/docker login \
+                          -u "$DOCKER_USER" --password-stdin
+
+                        /usr/bin/docker build -t anil1438/swiggy:latest .
+                        /usr/bin/docker push anil1438/swiggy:latest
+
+                        /usr/bin/docker logout
+                    '''
                 }
             }
         }
-        stage("TRIVY"){
-            steps{
-                sh "trivy image kastrov/swiggy:latest > trivy.txt" 
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh '/usr/bin/trivy image anil1438/swiggy:latest > trivy.txt'
             }
         }
-        stage('Deploy to container'){
-            steps{
-                sh 'docker run -d --name swiggy -p 3000:3000 kastrov/swiggy:latest'
+
+        stage('Deploy to Container') {
+            steps {
+                sh '''
+                    set -eu
+
+                    /usr/bin/docker rm -f swiggy 2>/dev/null || true
+
+                    /usr/bin/docker run -d \
+                      --name swiggy \
+                      --restart unless-stopped \
+                      -p 3000:3000 \
+                      anil1438/swiggy:latest
+
+                    /usr/bin/docker ps
+                '''
             }
         }
     }
